@@ -1,0 +1,26 @@
+---
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "My demostack nginx"
+Resources:
+  WebInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: 'ami-0c1bc246476a5572b'
+      KeyName: "NyNginx"
+      SecurityGroupIds:
+      - "sg-0dbc6784b2d717d9f"
+      
+      Tags:
+        - Key: Name
+          Value: "Jani"
+          
+      UserData:
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash
+            yum update -y
+            amazon-linux-extras install nginx1 -y
+            systemctl start nginx
+            systemctl enable nginx
