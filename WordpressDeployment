@@ -1,0 +1,257 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+
+
+  MyEC2Instance: 
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - EFS
+      - RDS
+    Properties: 
+      InstanceType: "t2.micro"
+      ImageId: "ami-0c1bc246476a5572b"
+      KeyName: "NyNginx"
+      UserData:
+          Fn::Base64: 
+            !Sub |
+              #!/bin/bash
+              cd /home/ec2-user
+              yum update -y
+              amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
+              yum install -y httpd mariadb-server
+              yum install php-gd -y
+              yum install amazon-efs-utils -y
+              yum install nfs-utils -y
+              mount -t efs -o tls ${EFS}:/ /var/www/html
+              systemctl start httpd
+              systemctl enable httpd
+              usermod -a -G apache ec2-user
+              chown -R ec2-user:apache /var/www
+              chmod 2775 /var/www && find /var/www -type d -exec sudo chmod 2775 {} ;
+              find /var/www -type f -exec sudo chmod 0664 {} ;
+              wget https://wordpress.org/latest.tar.gz
+              tar -xzf latest.tar.gz
+              cp wordpress/wp-config-sample.php wordpress/wp-config.php
+              sed -i -e "s/database_name_here/RDS/g" wordpress/wp-config.php
+              sed -i -e "s/password_here/123456789/g" wordpress/wp-config.php
+              sed -i -e "s/username_here/admin/g" wordpress/wp-config.php
+              sed -i -e "s/localhost/${RDS.Endpoint.Address}/g" wordpress/wp-config.php
+              cp -r wordpress/* /var/www/html/
+              curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+              chmod +x wp-cli.phar
+              mv wp-cli.phar /usr/local/bin/wp
+              cd /var/www/html
+              wp core install --url=${myLoadBalancer} --title="JANI" --admin_name=Admin --admin_password=Password --admin_email=test@gmail.com
+              
+              
+              
+
+      SecurityGroups:
+      - !Ref InstanceSecurityGroupForProvisioning
+
+
+  myLaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
+    DependsOn:
+    - MyEC2Instance
+    Properties:
+      LaunchTemplateName: !Sub '${AWS::StackName}-LaunchTemp'
+      LaunchTemplateData:
+        ImageId: "ami-0c1bc246476a5572b"
+        InstanceType: "t2.micro"
+        KeyName: "NyNginx"
+        UserData:
+          Fn::Base64: 
+            !Sub |
+              #!/bin/bash
+              cd /home/ec2-user
+              yum update -y
+              amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
+              yum install php-gd -y
+              yum install -y httpd 
+              yum install nfs-utils -y
+              yum install amazon-efs-utils -y
+              mount -t efs -o tls ${EFS}:/ /var/www/html
+              systemctl start httpd
+              systemctl enable httpd
+              
+        SecurityGroups:
+        - !Ref SecurityGroupForEC2
+  
+###############################################################################################  
+  
+  
+  SecurityGroupForEC2:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable access to HTTP via port 80
+      GroupName: SecGrpHTTP
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !GetAtt InstanceSecurityGroupForAutoScaling.GroupId
+
+  #############################################################################################
+  
+  
+  InstanceSecurityGroupForProvisioning:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable access to port 80,22
+      GroupName: SecGrpForProvisioning
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  
+  
+  InstanceSecurityGroupForRDS:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable access to port 3306
+      GroupName: SecGrpForRDS
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+
+ 
+  InstanceSecurityGroupForMountTargets:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable access to port 2049
+      GroupName: SecGrpForMountTargets
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          CidrIp: 0.0.0.0/0
+          
+ ###############################################################################################           
+ 
+  EFS:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      PerformanceMode: maxIO
+      Encrypted: false
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+        - TransitionToPrimaryStorageClass: AFTER_1_ACCESS
+      FileSystemTags:
+        - Key: EFS
+          Value: TestFileSystem
+      
+  
+  MountTarget1: 
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref EFS
+      SubnetId: subnet-0728e99327cf0d35c
+      SecurityGroups: 
+      - !GetAtt InstanceSecurityGroupForMountTargets.GroupId
+
+  MountTarget2: 
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref EFS
+      SubnetId: subnet-0a2effd99f6e2a508
+      SecurityGroups: 
+      - !GetAtt InstanceSecurityGroupForMountTargets.GroupId
+
+  MountTarget3: 
+    Type: AWS::EFS::MountTarget
+    Properties: 
+      FileSystemId: !Ref EFS
+      SubnetId: subnet-093c212a4de961d80
+      SecurityGroups: 
+      - !GetAtt InstanceSecurityGroupForMountTargets.GroupId
+
+ ###############################################################################################  
+ 
+  RDS:
+    Type: AWS::RDS::DBInstance
+    Properties: 
+      DBInstanceClass: db.t2.micro
+      DBName: RDS
+      StorageType: GP2
+      Engine: mysql
+      MasterUsername: admin
+      MasterUserPassword: 123456789
+      AllocatedStorage: 20
+      BackupRetentionPeriod: 0
+      VPCSecurityGroups: 
+      - !GetAtt InstanceSecurityGroupForRDS.GroupId
+  
+  # Autoscaling grupp i 3 olika zoner + refererar till min targetgroup #
+  myASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+    - MyEC2Instance
+    Properties:
+      TargetGroupARNs: 
+        - !Ref myTargetGroup
+      LaunchTemplate:
+        LaunchTemplateId: !Ref myLaunchTemplate
+        Version: !GetAtt myLaunchTemplate.LatestVersionNumber
+      MaxSize: '3'
+      MinSize: '1'
+      DesiredCapacity: '2'
+      AvailabilityZones:
+        - "eu-west-1a"
+        - "eu-west-1b"
+        - "eu-west-1c"
+
+# Target grupp på port 80  #
+
+  myTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-TG'
+      Protocol: HTTP
+      VpcId: vpc-03175757278572ed2
+      Port: 80
+
+# Skapar Lastbalanceraren på alla 3 av mina subnät och använder sig av samma säkerhetsgrupp som EC2erna gör #
+  myLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties: 
+      Name: !Sub '${AWS::StackName}-LB'
+      Scheme: internet-facing
+      Subnets: 
+        - "subnet-0728e99327cf0d35c"
+        - "subnet-0a2effd99f6e2a508"
+        - "subnet-093c212a4de961d80"
+      SecurityGroups:
+        - !GetAtt InstanceSecurityGroupForAutoScaling.GroupId
+
+# Skapar en listener på port 80 (HTTP) som även refererar till både lastbalanceraren och target gruppen #
+  HTTPlistener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref myTargetGroup
+      LoadBalancerArn: !Ref myLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  
+  # Skapar en säkerhetsgrupp för EC2 och lastbalanceraren för port 80 #
+  InstanceSecurityGroupForAutoScaling:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable access to HTTP via port 80
+      GroupName: SecGrp
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
