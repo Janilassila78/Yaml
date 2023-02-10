@@ -1,0 +1,34 @@
+
+# installs httpd and modifyes the index file
+---
+- name: setup webserver
+  hosts: all
+  become: true
+  tasks:
+    - name: httpd installed
+      yum:
+        name: httpd
+        state: latest
+    
+    - name: httpd service enabled
+      service:
+        name: httpd
+        enabled: true
+        state: started
+
+    - name: Create a new file with permissions
+      file:
+        path: /var/www/html/index.html
+        state: touch
+        mode: 0744
+        owner: apache
+        group: apache
+    
+    
+    - name: insert text
+      blockinfile:
+        path: /var/www/html/index.html
+        block: |
+          Welcome to XfusionCorp!
+          This is Nautilus sample file, created using Ansible!
+          Please do not modify this file manually!
